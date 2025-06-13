@@ -1,1 +1,24 @@
-spring.application.name=batch-practice
+spring:
+  application:
+    name: batch-practice
+  datasource:
+    url: jdbc:mysql://localhost:3306/mydb?serverTimezone=Asia/Seoul
+    username: root
+    password: 1234
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    database: mysql
+    database-platform: org.hibernate.dialect.MySQL8Dialect
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+
+  batch:
+    job: # ?? ?? ?? (job ?? ??)
+      enabled: false # ??? ??? job(??)? ?? ??? ?? ???. ???? ?? ??? ??
+    # ??? ?? ??? ??? ?? ???? ?? ?? ???? ??
+    jdbc:
+      initialize-schema: always
+logging:
+  level:
+    org.springframework.batch: debug
