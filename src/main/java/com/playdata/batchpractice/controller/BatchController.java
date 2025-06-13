@@ -34,7 +34,7 @@ public class BatchController {
             log.info("========== 배치 완료! 상태: {} ==========", jobExecution.getStatus());
 
             return String.format("배치 실행 완료! 상태: %s, 처리된 아이템 수: %d",
-                    jobExecution.getExitStatus(),
+                    jobExecution.getStatus(),
                     jobExecution.getStepExecutions().iterator().next().getWriteCount());
 
         } catch (Exception e) {
