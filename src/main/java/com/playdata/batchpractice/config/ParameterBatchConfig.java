@@ -1,6 +1,8 @@
 package com.playdata.batchpractice.config;
 
 import com.playdata.batchpractice.entity.Order;
+import jakarta.persistence.EntityManager;
+import java.time.LocalDate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.Job;
@@ -9,10 +11,12 @@ import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.builder.StepBuilder;
+import org.springframework.batch.core.step.tasklet.Tasklet;
 import org.springframework.batch.item.ItemProcessor;
 import org.springframework.batch.item.database.JdbcBatchItemWriter;
 import org.springframework.batch.item.database.JdbcCursorItemReader;
 import org.springframework.batch.item.database.builder.JdbcCursorItemReaderBuilder;
+import org.springframework.batch.repeat.RepeatStatus;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -44,6 +48,7 @@ public class ParameterBatchConfig {
     private final JobRepository jobRepository;
     private final PlatformTransactionManager transactionManager;
     private final DataSource dataSource;
+    private final EntityManager entityManager;
 
 
     // 1. ItemReader
@@ -138,37 +143,76 @@ public class ParameterBatchConfig {
         return writer;
     }
 
+    /*
+     # chunk
+     - 대량 데이터 처리
+     - 작은 데이터로 나누어 여러건 처리 (기준별로 데이터를 잘게 나누어 진행)
+     - 데이터 변환, 이관
 
+     # Tasklet
+     - 단순 작업
+     - 전체를 한 번에
+     - 파일 삭제, 통계 조회, 알림
+     */
 
-    // 4. step (예외 처리 기능이 추가된 step)
     @Bean
-    public Step faultTolerantStep() {
-        return new StepBuilder("faultTolerantStep", jobRepository)
-                .<Order, Order>chunk(3, transactionManager)
-                .reader(parameterOrderReader())
-                .processor(parameterProcessor())
-                .writer(parameterWriter())
+    @StepScope
+    public Tasklet beforeTasklet(
+            @Value("#{jobParameters['startDate']}") String startDate,
+            @Value("#{jobParameters['endDate']}") String endDate
+    ) {
+        return (contribution, chunkContext) -> {
+            // contribution: step 실행 기여도 정보 (읽은 개수, 처리한 개수, 쓴 개수 등을 제어)
+            // chunkContext: 현재 실행중인 컨텍스트 정보 (step 실행 정보, job 실행 정보)
+            // Tasklet 에서 실행할 내용
+            String countQuery = """
+            SELECT COUNT(o) FROM Order o
+            WHERE o.status = 'PENDING'
+            AND DATE(o.orderDate) BETWEEN :startDate AND :endDate
+            """;
 
-                // 예외 처리 설정
-                .faultTolerant()
+            Long pendingCount = entityManager.createQuery(countQuery, Long.class)
+                    .setParameter("startDate", LocalDate.parse(startDate))
+                    .setParameter("endDate", LocalDate.parse(endDate))
+                    .getSingleResult();
 
-                // Skip 설정 - 특정 예외는 건너뛰기
-                .skip(RuntimeException.class)
-                .skip(IllegalArgumentException.class)
-                .skipLimit(10) // 최대 10번까지 Skip 허용
+            log.info("===  배치 처리 전 현황 ===");
+            log.info("처리 대상 기간: {} ~ {}", startDate, endDate);
+            log.info("처리 대상 주문 수: {}건", pendingCount);
+            log.info("========================");
 
-                // Retry - 특정 예외(일시적 오류)는 재시도
-                .retry(IllegalStateException.class)
-                .retryLimit(3) // 최대 3번까지 재시도
+            // FINISHED: 작업 완료. 다음 step 로 진행
+            // CONTINUABLE: 작업 계속. 이 Tasklet 을 다시 실행
+            return RepeatStatus.FINISHED;
+        };
+    }
 
+    // Tasklet 을 위한 새로운 step 생성
+    // 매개값은 모두 null 전달 (jobParameter 에서 가져옴)
+    @Bean
+    public Step beforeParameterStep() {
+        return new StepBuilder("beforeParameterStep", jobRepository)
+                .tasklet(beforeTasklet(null, null), transactionManager)
                 .build();
     }
 
-    // 5. Job
+    // 4. step (예외 처리 기능이 추가된 step)
     @Bean
-    public Job faultTolerantJob() {
-        return new JobBuilder("falutTolerantJob", jobRepository)
-                .start(faultTolerantStep())
+    public Step parameterProcessStep() {
+        return new StepBuilder("parameterProcessStep", jobRepository)
+                .<Order, Order>chunk(3, transactionManager)
+                .reader(parameterOrderReader(null, null, null))
+                .processor(parameterProcessor(null))
+                .writer(parameterWriter())
+                .build();
+    }
+
+    // 5. Job (step 여러 개)
+    @Bean
+    public Job parameterJob() {
+        return new JobBuilder("parameterJob", jobRepository)
+                .start(beforeParameterStep())
+                .next(parameterProcessStep())
                 .build();
     }
 
